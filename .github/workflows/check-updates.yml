@@ -1,0 +1,116 @@
+name: Check Upstream Updates
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Specific branch to check (leave empty for all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    name: Check ${{ matrix.branch }}
+    runs-on: macos-26
+    strategy:
+      matrix:
+        branch: [community, master]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Filter branch (manual dispatch)
+        id: filter
+        if: github.event.inputs.branch != '' && github.event.inputs.branch != matrix.branch
+        run: echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - name: Read last built SHA
+        if: steps.filter.outputs.skip != 'true'
+        id: read-state
+        run: |
+          LAST_SHA=$(jq -r '.branches["${{ matrix.branch }}"].last_built_sha' config/upstream.json)
+          echo "last_sha=${LAST_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Check upstream
+        if: steps.filter.outputs.skip != 'true'
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RESULT=$(bash scripts/check-upstream.sh "${{ matrix.branch }}" "${{ steps.read-state.outputs.last_sha }}")
+          echo "result=${RESULT}" >> "$GITHUB_OUTPUT"
+          HAS_UPDATE=$(echo "$RESULT" | jq -r '.has_update')
+          echo "has_update=${HAS_UPDATE}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate app token
+        if: steps.filter.outputs.skip != 'true' && steps.check.outputs.has_update == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Open PR
+        if: steps.filter.outputs.skip != 'true' && steps.check.outputs.has_update == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          RESULT='${{ steps.check.outputs.result }}'
+          NEW_SHA=$(echo "$RESULT" | jq -r '.sha')
+          VERSION=$(echo "$RESULT" | jq -r '.version')
+          COMPARE_URL=$(echo "$RESULT" | jq -r '.compare_url')
+          BRANCH="${{ matrix.branch }}"
+          PR_BRANCH="update/${BRANCH}-${NEW_SHA:0:8}"
+
+          # Check if PR already exists for this SHA
+          EXISTING=$(gh pr list --head "$PR_BRANCH" --json number --jq 'length')
+          if [ "$EXISTING" != "0" ]; then
+            echo "PR already exists for ${PR_BRANCH}, skipping"
+            exit 0
+          fi
+
+          # Delete stale remote branch if it exists (from a previous failed run)
+          if git ls-remote --exit-code --heads origin "$PR_BRANCH" > /dev/null 2>&1; then
+            git push origin --delete "$PR_BRANCH"
+          fi
+
+          git config user.name "realm-xcframework-bot[bot]"
+          git config user.email "realm-xcframework-bot[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/HamstringAssassin/realm-swift-xcframeworks.git"
+          git checkout -b "$PR_BRANCH"
+
+          jq --arg branch "$BRANCH" \
+             --arg sha "$NEW_SHA" \
+             --arg version "$VERSION" \
+             '.branches[$branch].last_built_sha = $sha | .branches[$branch].last_built_version = $version' \
+             config/upstream.json > config/upstream.json.tmp
+          mv config/upstream.json.tmp config/upstream.json
+
+          git add config/upstream.json
+          git commit -m "build: update ${BRANCH} to ${VERSION} (${NEW_SHA:0:8})"
+          git push origin "$PR_BRANCH"
+
+          # Build PR body
+          PR_BODY="## ${BRANCH} branch update
+
+          **Version:** ${VERSION}
+          **Commit:** [\`${NEW_SHA:0:8}\`](https://github.com/realm/realm-swift/commit/${NEW_SHA})"
+
+          if [ -n "$COMPARE_URL" ] && [ "$COMPARE_URL" != "null" ]; then
+            PR_BODY="${PR_BODY}
+          **Changes:** [View diff](${COMPARE_URL})"
+          fi
+
+          PR_BODY="${PR_BODY}
+
+          Merging this PR will trigger the build workflow to produce new xcframework artifacts."
+
+          gh pr create \
+            --title "build(${BRANCH}): update to ${VERSION} (${NEW_SHA:0:8})" \
+            --body "$PR_BODY" \
+            --base main

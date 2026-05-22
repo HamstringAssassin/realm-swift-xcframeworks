@@ -1,0 +1,14 @@
+{
+  "branches": {
+    "community": {
+      "last_built_sha": "",
+      "last_built_version": "",
+      "build_number": 0
+    },
+    "master": {
+      "last_built_sha": "",
+      "last_built_version": "",
+      "build_number": 0
+    }
+  }
+}

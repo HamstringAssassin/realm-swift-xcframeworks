@@ -1,0 +1,221 @@
+name: Build XCFrameworks
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'config/upstream.json'
+      - 'config/xcode-versions.json'
+
+permissions:
+  contents: write
+
+jobs:
+  detect-changes:
+    name: Detect what to build
+    runs-on: macos-26
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Build matrix
+        id: matrix
+        run: |
+          # Read xcode versions
+          XCODE_VERSIONS=$(jq -c '[.versions[]]' config/xcode-versions.json)
+
+          # Determine which branches changed
+          CHANGED_BRANCHES=$(diff <(git show "HEAD~1:config/upstream.json" 2>/dev/null | jq -r '.branches | to_entries[] | "\(.key)=\(.value.last_built_sha)"' | sort) \
+                                  <(jq -r '.branches | to_entries[] | "\(.key)=\(.value.last_built_sha)"' config/upstream.json | sort) \
+                                  | grep '^>' | sed 's/^> //' | cut -d= -f1 || true)
+
+          # If xcode-versions.json changed, rebuild all branches
+          if git diff HEAD~1 --name-only 2>/dev/null | grep -q 'config/xcode-versions.json'; then
+            CHANGED_BRANCHES=$(jq -r '.branches | keys[]' config/upstream.json)
+          fi
+
+          # If no branches detected, build all
+          if [ -z "$CHANGED_BRANCHES" ]; then
+            CHANGED_BRANCHES=$(jq -r '.branches | keys[]' config/upstream.json)
+          fi
+
+          # Build the matrix JSON
+          MATRIX_ENTRIES="[]"
+          for branch in $CHANGED_BRANCHES; do
+            SHA=$(jq -r --arg b "$branch" '.branches[$b].last_built_sha' config/upstream.json)
+            VERSION=$(jq -r --arg b "$branch" '.branches[$b].last_built_version' config/upstream.json)
+            BUILD_NUM=$(jq -r --arg b "$branch" '.branches[$b].build_number' config/upstream.json)
+
+            # Skip branches with empty SHA
+            if [ -z "$SHA" ] || [ "$SHA" = "" ]; then
+              echo "Skipping ${branch}: no SHA configured"
+              continue
+            fi
+
+            for xcode in $(echo "$XCODE_VERSIONS" | jq -r '.[].version'); do
+              APP=$(echo "$XCODE_VERSIONS" | jq -r --arg v "$xcode" '.[] | select(.version == $v) | .app')
+              MATRIX_ENTRIES=$(echo "$MATRIX_ENTRIES" | jq -c --arg b "$branch" --arg s "$SHA" \
+                --arg v "$VERSION" --arg bn "$BUILD_NUM" --arg xv "$xcode" --arg xa "$APP" \
+                '. + [{"branch": $b, "sha": $s, "version": $v, "build_number": ($bn | tonumber), "xcode_version": $xv, "xcode_app": $xa}]')
+            done
+          done
+
+          if [ "$MATRIX_ENTRIES" = "[]" ]; then
+            echo "No builds needed"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix={\"include\":${MATRIX_ENTRIES}}" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Matrix: ${MATRIX_ENTRIES}"
+
+  build:
+    name: Build ${{ matrix.branch }} (Xcode ${{ matrix.xcode_version }})
+    needs: detect-changes
+    if: fromJSON(needs.detect-changes.outputs.matrix).include[0] != null
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build xcframeworks
+        run: |
+          bash scripts/build-xcframework.sh \
+            "${{ matrix.branch }}" \
+            "${{ matrix.sha }}" \
+            "${{ matrix.xcode_app }}" \
+            "./build-output/${{ matrix.branch }}/${{ matrix.xcode_version }}"
+
+      - name: Package artifacts
+        run: |
+          bash scripts/package-release.sh \
+            "./build-output/${{ matrix.branch }}/${{ matrix.xcode_version }}" \
+            "./release-artifacts/${{ matrix.branch }}" \
+            "${{ matrix.xcode_version }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.branch }}-xcode${{ matrix.xcode_version }}
+          path: ./release-artifacts/${{ matrix.branch }}/
+          retention-days: 5
+
+  release:
+    name: Publish release (${{ matrix.branch }})
+    needs: [detect-changes, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    strategy:
+      matrix:
+        branch: [community, master]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read build info
+        id: info
+        run: |
+          VERSION=$(jq -r --arg b "${{ matrix.branch }}" '.branches[$b].last_built_version' config/upstream.json)
+          BUILD_NUM=$(jq -r --arg b "${{ matrix.branch }}" '.branches[$b].build_number' config/upstream.json)
+          SHA=$(jq -r --arg b "${{ matrix.branch }}" '.branches[$b].last_built_sha' config/upstream.json)
+          NEW_BUILD_NUM=$((BUILD_NUM + 1))
+          TAG="${{ matrix.branch }}-${VERSION}-build.${NEW_BUILD_NUM}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${NEW_BUILD_NUM}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if SHA was built
+        id: check
+        run: |
+          SHA="${{ steps.info.outputs.sha }}"
+          if [ -z "$SHA" ] || [ "$SHA" = "" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts for this branch
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ matrix.branch }}-*
+          path: ./release-artifacts/
+          merge-multiple: true
+
+      - name: List artifacts
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          echo "=== Release artifacts ==="
+          ls -la ./release-artifacts/
+          echo "=== Checksums ==="
+          cat ./release-artifacts/checksums.json
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.info.outputs.tag }}"
+          VERSION="${{ steps.info.outputs.version }}"
+          SHA="${{ steps.info.outputs.sha }}"
+          BRANCH="${{ matrix.branch }}"
+          CHECKSUMS=$(cat ./release-artifacts/checksums.json)
+
+          # Build release notes with checksums for easy copy-paste
+          REALM_CHECKSUM=$(echo "$CHECKSUMS" | jq -r '.["Realm.spm.zip"]')
+          REALM_SWIFT_FILE=$(echo "$CHECKSUMS" | jq -r 'keys[] | select(startswith("RealmSwift"))')
+          REALM_SWIFT_CHECKSUM=$(echo "$CHECKSUMS" | jq -r '[to_entries[] | select(.key | startswith("RealmSwift"))] | .[0].value')
+
+          RELEASE_NOTES="## ${BRANCH} branch — realm-swift ${VERSION}
+
+          **Source commit:** [\`${SHA:0:8}\`](https://github.com/realm/realm-swift/commit/${SHA})
+
+          ### Checksums
+
+          \`\`\`
+          $(echo "$CHECKSUMS" | jq -r 'to_entries[] | "\(.key): \(.value)"')
+          \`\`\`
+
+          ### Usage in Package.swift
+
+          \`\`\`swift
+          .binaryTarget(
+              name: \"Realm\",
+              url: \"https://github.com/HamstringAssassin/realm-swift-xcframeworks/releases/download/${TAG}/Realm.spm.zip\",
+              checksum: \"${REALM_CHECKSUM}\"
+          ),
+          .binaryTarget(
+              name: \"RealmSwift\",
+              url: \"https://github.com/HamstringAssassin/realm-swift-xcframeworks/releases/download/${TAG}/${REALM_SWIFT_FILE}\",
+              checksum: \"${REALM_SWIFT_CHECKSUM}\"
+          ),
+          \`\`\`"
+
+          gh release create "$TAG" \
+            --title "${BRANCH} ${VERSION} (build.${{ steps.info.outputs.build_number }})" \
+            --notes "$RELEASE_NOTES" \
+            ./release-artifacts/Realm.spm.zip \
+            ./release-artifacts/RealmSwift@*.spm.zip
+
+      - name: Update upstream.json
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          BRANCH="${{ matrix.branch }}"
+          NEW_BUILD_NUM="${{ steps.info.outputs.build_number }}"
+
+          jq --arg b "$BRANCH" --arg bn "$NEW_BUILD_NUM" \
+            '.branches[$b].build_number = ($bn | tonumber)' \
+            config/upstream.json > config/upstream.json.tmp
+          mv config/upstream.json.tmp config/upstream.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add config/upstream.json
+          git commit -m "build: bump ${BRANCH} build number to ${NEW_BUILD_NUM} [skip ci]"
+          git push
