@@ -96,8 +96,19 @@ jobs:
           path: ./release-artifacts/
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Check artifacts exist
         if: steps.info.outputs.skip == 'false'
+        id: artifacts
+        run: |
+          if [ -f "./release-artifacts/checksums.json" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No artifacts found for ${{ matrix.branch }} — skipping release"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.info.outputs.skip == 'false' && steps.artifacts.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -111,7 +122,7 @@ jobs:
             "HamstringAssassin/realm-swift-xcframeworks"
 
       - name: Bump build number
-        if: steps.info.outputs.skip == 'false'
+        if: steps.info.outputs.skip == 'false' && steps.artifacts.outputs.found == 'true'
         run: |
           bash scripts/bump-build-number.sh \
             "${{ matrix.branch }}" \
