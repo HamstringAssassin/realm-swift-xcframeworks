@@ -1,6 +1,7 @@
 name: Build XCFrameworks
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -62,7 +63,7 @@ jobs:
   release:
     name: Publish release (${{ matrix.branch }})
     needs: [detect-changes, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: macos-26
     strategy:
       matrix:

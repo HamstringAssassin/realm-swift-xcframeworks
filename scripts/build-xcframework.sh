@@ -48,16 +48,15 @@ git checkout "${SHA}"
 echo "=== Downloading realm-core ==="
 bash build.sh download-core
 
-# Build static xcframeworks for all platforms
-echo "=== Building static xcframeworks ==="
+# Build dynamic xcframeworks for all platforms (matches Realm's official SPM packaging).
+# Static xcframeworks cause duplicate ObjC class registrations when SPM links
+# them into multiple targets in the same process (e.g. framework + test bundle).
+echo "=== Building xcframeworks ==="
 export CI=true
-export CONFIGURATION=Static
-export LINKAGE=static
 unset GITHUB_WORKSPACE
 bash build.sh xcframework
 
-# The xcframeworks are in build/Static/
-BUILD_DIR="${WORK_DIR}/realm-swift/build/Static"
+BUILD_DIR="${WORK_DIR}/realm-swift/build/Release"
 
 if [ ! -d "${BUILD_DIR}/Realm.xcframework" ]; then
   echo "ERROR: Realm.xcframework not found in ${BUILD_DIR}"
