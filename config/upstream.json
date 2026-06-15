@@ -1,8 +1,8 @@
 {
   "branches": {
     "community": {
-      "last_built_sha": "1cd09f1a41e7336f3c3eea76b60bc979bbdf46a9",
-      "last_built_version": "20.0.4",
+      "last_built_sha": "ca03df491ec5e4bb8af0bca1e9957d08c10ec2da",
+      "last_built_version": "20.0.5",
       "build_number": 2
     },
     "master": {
