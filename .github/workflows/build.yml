@@ -66,6 +66,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: macos-26
     strategy:
+      max-parallel: 1
       matrix:
         branch: [community, master]
     steps:
