@@ -66,6 +66,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: macos-26
     strategy:
+      fail-fast: false
       max-parallel: 1
       matrix:
         branch: [community, master]
@@ -74,21 +75,34 @@ jobs:
 
       - name: Read build info
         id: info
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           BRANCH="${{ matrix.branch }}"
           VERSION=$(jq -r --arg b "$BRANCH" '.branches[$b].last_built_version' config/upstream.json)
-          BUILD_NUM=$(jq -r --arg b "$BRANCH" '.branches[$b].build_number' config/upstream.json)
           SHA=$(jq -r --arg b "$BRANCH" '.branches[$b].last_built_sha' config/upstream.json)
-          NEW_BUILD_NUM=$((BUILD_NUM + 1))
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "build_number=${NEW_BUILD_NUM}" >> "$GITHUB_OUTPUT"
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "tag=${BRANCH}-${VERSION}-build.${NEW_BUILD_NUM}" >> "$GITHUB_OUTPUT"
-          if [ -z "$SHA" ] || [ "$SHA" = "" ]; then
+
+          if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
+            echo "No SHA configured for ${BRANCH} — skipping release"
             echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # Derive the build number from the releases that actually exist, not from
+          # a counter in the checked-out upstream.json. Two overlapping runs both
+          # read the same committed counter and compute the same tag, which fails
+          # with "a release with the same tag name already exists".
+          PREFIX="${BRANCH}-${VERSION}-build."
+          LAST=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName \
+            --jq "[.[].tagName | select(startswith(\"${PREFIX}\")) | ltrimstr(\"${PREFIX}\") | tonumber?] | max // 0")
+          NEW_BUILD_NUM=$((LAST + 1))
+
+          echo "Latest published build for ${PREFIX%.}: ${LAST} — next is ${NEW_BUILD_NUM}"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${NEW_BUILD_NUM}" >> "$GITHUB_OUTPUT"
+          echo "tag=${PREFIX}${NEW_BUILD_NUM}" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts for this branch
         if: steps.info.outputs.skip == 'false'
@@ -122,10 +136,3 @@ jobs:
             "${{ steps.info.outputs.build_number }}" \
             "./release-artifacts" \
             "HamstringAssassin/realm-swift-xcframeworks"
-
-      - name: Bump build number
-        if: steps.info.outputs.skip == 'false' && steps.artifacts.outputs.found == 'true'
-        run: |
-          bash scripts/bump-build-number.sh \
-            "${{ matrix.branch }}" \
-            "${{ steps.info.outputs.build_number }}"

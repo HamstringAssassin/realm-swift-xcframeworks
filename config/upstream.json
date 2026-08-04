@@ -2,13 +2,11 @@
   "branches": {
     "community": {
       "last_built_sha": "ca03df491ec5e4bb8af0bca1e9957d08c10ec2da",
-      "last_built_version": "20.0.5",
-      "build_number": 3
+      "last_built_version": "20.0.5"
     },
     "master": {
       "last_built_sha": "c22f9303d446fc3c044e4c151ed19597464b6bd7",
-      "last_built_version": "10.54.6",
-      "build_number": 0
+      "last_built_version": "10.54.6"
     }
   }
 }

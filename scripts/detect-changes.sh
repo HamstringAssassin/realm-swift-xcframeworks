@@ -26,7 +26,6 @@ MATRIX_ENTRIES="[]"
 for branch in $CHANGED_BRANCHES; do
   SHA=$(jq -r --arg b "$branch" '.branches[$b].last_built_sha' config/upstream.json)
   VERSION=$(jq -r --arg b "$branch" '.branches[$b].last_built_version' config/upstream.json)
-  BUILD_NUM=$(jq -r --arg b "$branch" '.branches[$b].build_number' config/upstream.json)
 
   if [ -z "$SHA" ] || [ "$SHA" = "" ]; then
     echo "Skipping ${branch}: no SHA configured" >&2
@@ -36,8 +35,8 @@ for branch in $CHANGED_BRANCHES; do
   for xcode in $(echo "$XCODE_VERSIONS" | jq -r '.[].version'); do
     APP=$(echo "$XCODE_VERSIONS" | jq -r --arg v "$xcode" '.[] | select(.version == $v) | .app')
     MATRIX_ENTRIES=$(echo "$MATRIX_ENTRIES" | jq -c --arg b "$branch" --arg s "$SHA" \
-      --arg v "$VERSION" --arg bn "$BUILD_NUM" --arg xv "$xcode" --arg xa "$APP" \
-      '. + [{"branch": $b, "sha": $s, "version": $v, "build_number": ($bn | tonumber), "xcode_version": $xv, "xcode_app": $xa}]')
+      --arg v "$VERSION" --arg xv "$xcode" --arg xa "$APP" \
+      '. + [{"branch": $b, "sha": $s, "version": $v, "xcode_version": $xv, "xcode_app": $xa}]')
   done
 done
 
