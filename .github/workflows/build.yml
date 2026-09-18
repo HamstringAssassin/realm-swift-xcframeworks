@@ -63,7 +63,10 @@ jobs:
   release:
     name: Publish release (${{ matrix.branch }})
     needs: [detect-changes, build]
-    if: github.ref == 'refs/heads/main'
+    # Publish each branch that built, even if another branch failed.
+    # "Check artifacts exist" skips a branch with no artifacts.
+    # ponytail: a branch with some Xcode versions failed publishes a partial release; gate per branch if xcode-versions.json gets more than one entry.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.detect-changes.result == 'success' }}
     runs-on: xcode-27
     strategy:
       fail-fast: false
