@@ -17,7 +17,7 @@ permissions:
 jobs:
   check:
     name: Check ${{ matrix.branch }}
-    runs-on: macos-26
+    runs-on: macos-27
     strategy:
       matrix:
         branch: [community, master]
