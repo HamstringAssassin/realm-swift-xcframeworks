@@ -6,7 +6,6 @@ set -euo pipefail
 # Produces:
 #   <output_dir>/Realm.spm.zip
 #   <output_dir>/RealmSwift@<xcode_version>.spm.zip
-#   <output_dir>/checksums.json
 
 INPUT_DIR="$(cd "$1" && pwd)"
 mkdir -p "$2"
@@ -35,17 +34,4 @@ cd "${INPUT_DIR}"
 zip --symlinks -r "${OUTPUT_DIR}/${REALM_SWIFT_ZIP}" RealmSwift.xcframework
 cd - > /dev/null
 
-# Compute checksums
-REALM_CHECKSUM=$(shasum -a 256 "${OUTPUT_DIR}/Realm.spm.zip" | cut -d ' ' -f 1)
-REALM_SWIFT_CHECKSUM=$(shasum -a 256 "${OUTPUT_DIR}/${REALM_SWIFT_ZIP}" | cut -d ' ' -f 1)
-
-cat > "${OUTPUT_DIR}/checksums.json" <<EOF
-{
-  "Realm.spm.zip": "${REALM_CHECKSUM}",
-  "${REALM_SWIFT_ZIP}": "${REALM_SWIFT_CHECKSUM}"
-}
-EOF
-
 echo "=== Packaging complete ==="
-echo "Realm.spm.zip        checksum: ${REALM_CHECKSUM}"
-echo "${REALM_SWIFT_ZIP}  checksum: ${REALM_SWIFT_CHECKSUM}"
