@@ -12,23 +12,21 @@ BUILD_NUMBER="$5"
 ARTIFACTS_DIR="$6"
 REPO="$7"
 
-CHECKSUMS=$(cat "${ARTIFACTS_DIR}/checksums.json")
+# Checksums come from the files that are published.
+checksum() { shasum -a 256 "$1" | cut -d ' ' -f 1; }
 
-REALM_CHECKSUM=$(echo "$CHECKSUMS" | jq -r '.["Realm.spm.zip"]')
-REALM_SWIFT_FILE=$(echo "$CHECKSUMS" | jq -r 'keys[] | select(startswith("RealmSwift"))')
-REALM_SWIFT_CHECKSUM=$(echo "$CHECKSUMS" | jq -r '[to_entries[] | select(.key | startswith("RealmSwift"))] | .[0].value')
+REALM_CHECKSUM=$(checksum "${ARTIFACTS_DIR}/Realm.spm.zip")
+CHECKSUM_LINES="Realm.spm.zip: ${REALM_CHECKSUM}"
+USAGE=""
 
-RELEASE_NOTES="## ${BRANCH} branch — realm-swift ${VERSION}
-
-**Source commit:** [\`${SHA:0:8}\`](https://github.com/realm/realm-swift/commit/${SHA})
-
-### Checksums
-
-\`\`\`
-$(echo "$CHECKSUMS" | jq -r 'to_entries[] | "\(.key): \(.value)"')
-\`\`\`
-
-### Usage in Package.swift
+for zip in "${ARTIFACTS_DIR}"/RealmSwift@*.spm.zip; do
+  REALM_SWIFT_FILE=$(basename "$zip")
+  REALM_SWIFT_CHECKSUM=$(checksum "$zip")
+  XCODE_VERSION=${REALM_SWIFT_FILE#RealmSwift@}
+  XCODE_VERSION=${XCODE_VERSION%.spm.zip}
+  CHECKSUM_LINES+=$'\n'"${REALM_SWIFT_FILE}: ${REALM_SWIFT_CHECKSUM}"
+  USAGE+="
+#### Xcode ${XCODE_VERSION}
 
 \`\`\`swift
 .binaryTarget(
@@ -41,10 +39,25 @@ $(echo "$CHECKSUMS" | jq -r 'to_entries[] | "\(.key): \(.value)"')
     url: \"https://github.com/${REPO}/releases/download/${TAG}/${REALM_SWIFT_FILE}\",
     checksum: \"${REALM_SWIFT_CHECKSUM}\"
 ),
-\`\`\`"
+\`\`\`
+"
+done
+
+RELEASE_NOTES="## ${BRANCH} branch — realm-swift ${VERSION}
+
+**Source commit:** [\`${SHA:0:8}\`](https://github.com/realm/realm-swift/commit/${SHA})
+
+### Checksums
+
+\`\`\`
+${CHECKSUM_LINES}
+\`\`\`
+
+### Usage in Package.swift
+${USAGE}"
 
 gh release create "$TAG" \
   --title "${BRANCH} ${VERSION} (build.${BUILD_NUMBER})" \
   --notes "$RELEASE_NOTES" \
   "${ARTIFACTS_DIR}/Realm.spm.zip" \
-  ${ARTIFACTS_DIR}/RealmSwift@*.spm.zip
+  "${ARTIFACTS_DIR}"/RealmSwift@*.spm.zip

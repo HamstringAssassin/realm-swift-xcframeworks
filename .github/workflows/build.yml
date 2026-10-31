@@ -65,7 +65,7 @@ jobs:
     needs: [detect-changes, build]
     # Publish each branch that built, even if another branch failed.
     # "Check artifacts exist" skips a branch with no artifacts.
-    # ponytail: a branch with some Xcode versions failed publishes a partial release; gate per branch if xcode-versions.json gets more than one entry.
+    # ponytail: a branch with some Xcode versions failed publishes a partial release; gate per branch if a missing RealmSwift zip ever matters.
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.detect-changes.result == 'success' }}
     runs-on: xcode-27
     strategy:
@@ -113,13 +113,23 @@ jobs:
         with:
           pattern: ${{ matrix.branch }}-*
           path: ./release-artifacts/
-          merge-multiple: true
+
+      # Each Xcode build makes its own Realm.spm.zip, so merge-multiple would write
+      # them into one path at the same time. Keep the newest Xcode's copy.
+      - name: Merge artifacts
+        if: steps.info.outputs.skip == 'false'
+        run: |
+          cd ./release-artifacts 2>/dev/null || exit 0
+          REALM_ZIP=$(ls */Realm.spm.zip 2>/dev/null | sort -V | tail -1 || true)
+          [ -n "$REALM_ZIP" ] || exit 0
+          cp "$REALM_ZIP" .
+          cp */RealmSwift@*.spm.zip .
 
       - name: Check artifacts exist
         if: steps.info.outputs.skip == 'false'
         id: artifacts
         run: |
-          if [ -f "./release-artifacts/checksums.json" ]; then
+          if [ -f "./release-artifacts/Realm.spm.zip" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "No artifacts found for ${{ matrix.branch }} — skipping release"
