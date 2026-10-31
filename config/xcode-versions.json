@@ -1,6 +1,7 @@
 {
   "versions": [
     { "version": "27.0", "app": "Xcode_27.0" },
-    { "version": "27.1", "app": "Xcode" }
+    { "version": "27.1", "app": "Xcode_27.1" },
+    { "version": "27.2", "app": "Xcode" }
   ]
 }
